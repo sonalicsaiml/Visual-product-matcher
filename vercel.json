@@ -4,9 +4,7 @@
     {
       "src": "server/server.js",
       "use": "@vercel/node",
-      "config": {
-        "maxLambdaSize": "50mb"
-      }
+      "config": { "maxLambdaSize": "50mb" }
     },
     {
       "src": "public/**",
@@ -14,18 +12,7 @@
     }
   ],
   "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "server/server.js"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "public/$1"
-    }
-  ],
-  "env": {
-    "UPSTASH_REDIS_REST_URL": "https://maximum-oarfish-46119.upstash.io",
-    "UPSTASH_REDIS_REST_TOKEN": "AbQnAAIncDE5MTJkOTM3ZjExNDk0NDVjYjkwNWI4OGJkN2Y3MTFiOXAxNDYxMTk",
-    "NODE_ENV": "production"
-  }
+    { "src": "/api/(.*)", "dest": "server/server.js" },
+    { "src": "/(.*)", "dest": "public/$1" }
+  ]
 }
