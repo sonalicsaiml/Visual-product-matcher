@@ -3,6 +3,16 @@ const ImageProcessor = require("./imageProcessor");
 
 class ProductService {
   constructor() {
+    // Validate environment variables
+    if (
+      !process.env.UPSTASH_REDIS_REST_URL ||
+      !process.env.UPSTASH_REDIS_REST_TOKEN
+    ) {
+      throw new Error(
+        "Missing required environment variables: UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN"
+      );
+    }
+
     this.redis = new Redis({
       url: process.env.UPSTASH_REDIS_REST_URL,
       token: process.env.UPSTASH_REDIS_REST_TOKEN,
@@ -14,12 +24,12 @@ class ProductService {
 
   async testConnection() {
     try {
-      await this.redis.ping();
-      console.log("✅ Upstash Redis connection successful");
+      const result = await this.redis.ping();
+      console.log("✅ Upstash Redis connection successful", result);
       return true;
     } catch (error) {
       console.error("❌ Failed to connect to Upstash Redis:", error);
-      throw new Error("Database connection failed");
+      throw new Error(`Database connection failed: ${error.message}`);
     }
   }
 
@@ -34,7 +44,9 @@ class ProductService {
       return products;
     } catch (error) {
       console.error("Error fetching products:", error);
-      throw new Error("Failed to fetch products from database");
+      throw new Error(
+        `Failed to fetch products from database: ${error.message}`
+      );
     }
   }
 
@@ -54,15 +66,19 @@ class ProductService {
       return newProduct;
     } catch (error) {
       console.error("Error adding product:", error);
-      throw new Error("Failed to add product to database");
+      throw new Error(`Failed to add product to database: ${error.message}`);
     }
   }
 
   async storeProductFeatures(productId, features) {
     try {
-      await this.redis.set(`${this.featuresPrefix}${productId}`, features);
+      await this.redis.set(`${this.featuresPrefix}${productId}`, features, {
+        ex: 86400 * 7, // 7 days expiration
+      });
+      console.log(`✅ Features stored for product: ${productId}`);
     } catch (error) {
       console.error(`Error storing features for product ${productId}:`, error);
+      throw error;
     }
   }
 
@@ -83,49 +99,58 @@ class ProductService {
       }
 
       const similarities = [];
+      const batchSize = 5; // Process in smaller batches for serverless
 
-      for (const product of products) {
-        try {
-          let productFeatures = await this.getProductFeatures(product.id);
+      for (let i = 0; i < products.length; i += batchSize) {
+        const batch = products.slice(i, i + batchSize);
 
-          // If features don't exist, extract them from the product image
-          if (!productFeatures) {
-            console.log(`Extracting features for product: ${product.name}`);
-            try {
-              productFeatures =
-                await this.imageProcessor.extractFeaturesFromUrl(
-                  product.imageUrl
+        const batchPromises = batch.map(async (product) => {
+          try {
+            let productFeatures = await this.getProductFeatures(product.id);
+
+            // If features don't exist, extract them from the product image
+            if (!productFeatures) {
+              console.log(`Extracting features for product: ${product.name}`);
+              try {
+                productFeatures =
+                  await this.imageProcessor.extractFeaturesFromUrl(
+                    product.imageUrl
+                  );
+                await this.storeProductFeatures(product.id, productFeatures);
+              } catch (error) {
+                console.warn(
+                  `Failed to extract features for product ${product.id}:`,
+                  error.message
                 );
-              await this.storeProductFeatures(product.id, productFeatures);
-            } catch (error) {
-              console.warn(
-                `Failed to extract features for product ${product.id}:`,
-                error.message
-              );
-              continue;
+                return null;
+              }
             }
-          }
 
-          // Calculate similarity
-          const similarity = this.imageProcessor.cosineSimilarity(
-            queryFeatures,
-            productFeatures
-          );
+            // Calculate similarity
+            const similarity = this.imageProcessor.cosineSimilarity(
+              queryFeatures,
+              productFeatures
+            );
 
-          if (similarity >= minSimilarity) {
-            similarities.push({
-              ...product,
-              similarity: Math.round(similarity * 100) / 100,
-              matchPercentage: Math.round(similarity * 100),
-            });
+            if (similarity >= minSimilarity) {
+              return {
+                ...product,
+                similarity: Math.round(similarity * 100) / 100,
+                matchPercentage: Math.round(similarity * 100),
+              };
+            }
+            return null;
+          } catch (error) {
+            console.warn(
+              `Error processing product ${product.id}:`,
+              error.message
+            );
+            return null;
           }
-        } catch (error) {
-          console.warn(
-            `Error processing product ${product.id}:`,
-            error.message
-          );
-          continue;
-        }
+        });
+
+        const batchResults = await Promise.all(batchPromises);
+        similarities.push(...batchResults.filter((result) => result !== null));
       }
 
       // Sort by similarity score (descending)
@@ -135,7 +160,7 @@ class ProductService {
       return similarities.slice(0, 20); // Return top 20 matches
     } catch (error) {
       console.error("Error finding similar products:", error);
-      throw new Error("Failed to find similar products");
+      throw new Error(`Failed to find similar products: ${error.message}`);
     }
   }
 
@@ -147,7 +172,7 @@ class ProductService {
       );
     } catch (error) {
       console.error("Error fetching products by category:", error);
-      throw new Error("Failed to fetch products by category");
+      throw new Error(`Failed to fetch products by category: ${error.message}`);
     }
   }
 
@@ -618,30 +643,39 @@ class ProductService {
       },
     ];
 
+
     try {
       await this.redis.set(this.productsKey, sampleProducts);
       console.log(`✅ Initialized ${sampleProducts.length} sample products`);
       return sampleProducts;
     } catch (error) {
       console.error("Error initializing sample products:", error);
-      throw new Error("Failed to initialize product database");
+      throw new Error(
+        `Failed to initialize product database: ${error.message}`
+      );
     }
   }
 
   async clearAllData() {
     try {
+      // Get all products first
+      const products = await this.getAllProducts();
+
+      // Clear products
       await this.redis.del(this.productsKey);
 
       // Clear all feature data
-      const products = await this.getAllProducts();
-      for (const product of products) {
-        await this.redis.del(`${this.featuresPrefix}${product.id}`);
+      if (products && products.length > 0) {
+        const deletePromises = products.map((product) =>
+          this.redis.del(`${this.featuresPrefix}${product.id}`)
+        );
+        await Promise.all(deletePromises);
       }
 
       console.log("✅ All product data cleared");
     } catch (error) {
       console.error("Error clearing data:", error);
-      throw new Error("Failed to clear product data");
+      throw new Error(`Failed to clear product data: ${error.message}`);
     }
   }
 }

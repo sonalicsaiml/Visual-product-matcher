@@ -16,6 +16,7 @@ class ImageProcessor {
     try {
       console.log("Loading TensorFlow.js MobileNet model...");
 
+      // Use a more reliable model URL
       this.model = await tf.loadLayersModel(
         "https://storage.googleapis.com/tfjs-models/tfjs/mobilenet_v1_0.25_224/model.json"
       );
@@ -23,7 +24,7 @@ class ImageProcessor {
       console.log("✅ TensorFlow.js model loaded successfully");
       this.isInitialized = true;
 
-     
+      // Warm up the model
       const dummyInput = tf.zeros([1, 224, 224, 3]);
       const warmupPrediction = this.model.predict(dummyInput);
       warmupPrediction.dispose();
@@ -37,34 +38,34 @@ class ImageProcessor {
   }
 
   async preprocessImage(imageBuffer) {
+    let tensor = null;
+    let normalized = null;
+
     try {
-     
+      // Process image with Sharp
       const processedBuffer = await sharp(imageBuffer)
-        .resize(224, 224)
+        .resize(224, 224, { fit: "cover" })
         .removeAlpha()
         .raw()
         .toBuffer();
 
-     
-      const tensor = tf.tensor3d(
-        new Uint8Array(processedBuffer),
-        [224, 224, 3]
-      );
+      // Create tensor from processed buffer
+      tensor = tf.tensor3d(new Uint8Array(processedBuffer), [224, 224, 3]);
 
-     
-      const normalized = tensor.div(255.0);
+      // Normalize pixel values to [0, 1]
+      normalized = tensor.div(255.0);
 
-     
+      // Add batch dimension
       const batched = normalized.expandDims(0);
-
-     
-      tensor.dispose();
-      normalized.dispose();
 
       return batched;
     } catch (error) {
       console.error("Error preprocessing image:", error);
       throw new Error("Failed to preprocess image");
+    } finally {
+      // Clean up intermediate tensors
+      if (tensor) tensor.dispose();
+      if (normalized) normalized.dispose();
     }
   }
 
@@ -73,22 +74,27 @@ class ImageProcessor {
       await this.initialize();
     }
 
+    let processedImage = null;
+    let features = null;
+
     try {
-      
-      const processedImage = await this.preprocessImage(imageBuffer);
+      // Preprocess the image
+      processedImage = await this.preprocessImage(imageBuffer);
 
-    
-      const features = this.model.predict(processedImage);
+      // Extract features using the model
+      features = this.model.predict(processedImage);
 
+      // Convert to array
       const featureArray = await features.data();
-
-      processedImage.dispose();
-      features.dispose();
 
       return Array.from(featureArray);
     } catch (error) {
       console.error("Error extracting features:", error);
       throw new Error("Failed to extract image features");
+    } finally {
+      // Clean up tensors
+      if (processedImage) processedImage.dispose();
+      if (features) features.dispose();
     }
   }
 
@@ -98,9 +104,11 @@ class ImageProcessor {
 
       const response = await axios.get(imageUrl, {
         responseType: "arraybuffer",
-        timeout: 10000,
+        timeout: 15000, // Increased timeout
+        maxRedirects: 5,
         headers: {
           "User-Agent": "Visual-Product-Matcher/1.0",
+          Accept: "image/*",
         },
       });
 
@@ -110,41 +118,60 @@ class ImageProcessor {
 
       const imageBuffer = Buffer.from(response.data);
 
-      
-      const metadata = await sharp(imageBuffer).metadata();
-      if (
-        !metadata.format ||
-        !["jpeg", "png", "webp"].includes(metadata.format)
-      ) {
-        throw new Error(
-          "Unsupported image format. Please use JPEG, PNG, or WebP."
-        );
-      }
+      // Validate image
+      try {
+        const metadata = await sharp(imageBuffer).metadata();
+        if (
+          !metadata.format ||
+          !["jpeg", "png", "webp", "gif", "tiff"].includes(metadata.format)
+        ) {
+          throw new Error(
+            "Unsupported image format. Please use JPEG, PNG, WebP, GIF, or TIFF."
+          );
+        }
 
-      console.log(
-        `✅ Image downloaded successfully: ${metadata.width}x${metadata.height} ${metadata.format}`
-      );
+        console.log(
+          `✅ Image downloaded successfully: ${metadata.width}x${metadata.height} ${metadata.format}`
+        );
+      } catch (sharpError) {
+        throw new Error("Invalid or corrupted image file");
+      }
 
       return await this.extractFeatures(imageBuffer);
     } catch (error) {
       console.error("Error processing image from URL:", error);
-      if (error.code === "ENOTFOUND" || error.code === "ECONNREFUSED") {
+
+      if (error.code === "ENOTFOUND") {
         throw new Error(
-          "Unable to access the image URL. Please check the URL and try again."
+          "Unable to resolve the image URL. Please check the URL."
         );
-      } else if (error.response && error.response.status === 404) {
-        throw new Error("Image not found at the provided URL.");
-      } else if (error.message.includes("timeout")) {
+      } else if (error.code === "ECONNREFUSED") {
+        throw new Error("Connection refused. The server may be down.");
+      } else if (error.response?.status === 404) {
+        throw new Error("Image not found at the provided URL (404).");
+      } else if (error.response?.status === 403) {
+        throw new Error("Access denied to the image URL (403).");
+      } else if (
+        error.code === "ECONNABORTED" ||
+        error.message.includes("timeout")
+      ) {
         throw new Error(
           "Request timeout. Please try with a different image URL."
         );
+      } else if (error.message.includes("Unsupported image format")) {
+        throw error;
       }
-      throw error;
+
+      throw new Error(`Failed to process image: ${error.message}`);
     }
   }
 
- 
+  // Cosine similarity calculation
   cosineSimilarity(vectorA, vectorB) {
+    if (!vectorA || !vectorB) {
+      return 0;
+    }
+
     if (vectorA.length !== vectorB.length) {
       throw new Error("Vectors must have the same length");
     }
@@ -154,9 +181,12 @@ class ImageProcessor {
     let normB = 0;
 
     for (let i = 0; i < vectorA.length; i++) {
-      dotProduct += vectorA[i] * vectorB[i];
-      normA += vectorA[i] * vectorA[i];
-      normB += vectorB[i] * vectorB[i];
+      const a = vectorA[i] || 0;
+      const b = vectorB[i] || 0;
+
+      dotProduct += a * b;
+      normA += a * a;
+      normB += b * b;
     }
 
     normA = Math.sqrt(normA);
@@ -173,6 +203,7 @@ class ImageProcessor {
     try {
       const { data, info } = await sharp(imageBuffer)
         .resize(100, 100)
+        .removeAlpha()
         .raw()
         .toBuffer({ resolveWithObject: true });
 
@@ -182,10 +213,11 @@ class ImageProcessor {
         b: new Array(256).fill(0),
       };
 
+      // Calculate histogram
       for (let i = 0; i < data.length; i += 3) {
-        histogram.r[data[i]]++;
-        histogram.g[data[i + 1]]++;
-        histogram.b[data[i + 2]]++;
+        if (data[i] !== undefined) histogram.r[data[i]]++;
+        if (data[i + 1] !== undefined) histogram.g[data[i + 1]]++;
+        if (data[i + 2] !== undefined) histogram.b[data[i + 2]]++;
       }
 
       // Normalize histograms
@@ -202,6 +234,7 @@ class ImageProcessor {
       return null;
     }
   }
+
   async calculateEnhancedSimilarity(
     features1,
     features2,
