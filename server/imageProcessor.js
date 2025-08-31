@@ -1,4 +1,4 @@
-const tf = require("@tensorflow/tfjs-node");
+const tf = require("@tensorflow/tfjs");
 const sharp = require("sharp");
 const axios = require("axios");
 

@@ -1,3 +1,4 @@
+
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
@@ -13,7 +14,10 @@ const PORT = process.env.PORT || 3000;
 // Enhanced CORS configuration
 app.use(
   cors({
-    origin: ["http://localhost:3000", "https://your-domain.vercel.app"], // Add your actual domain
+    origin: [
+      "http://localhost:3000",
+      "https://visual-product-matcher-5fcboegv7-sonalis-projects-71ecc787.vercel.app",
+    ], // Add your actual domain
     credentials: true,
   })
 );
@@ -229,4 +233,5 @@ if (require.main === module) {
 }
 
 // Export for Vercel
+
 module.exports = app;
