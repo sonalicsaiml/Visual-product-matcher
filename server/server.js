@@ -210,7 +210,6 @@ app.use((req, res) => {
   });
 });
 
-// For local development
 if (require.main === module) {
   const startServer = async () => {
     try {
@@ -231,6 +230,7 @@ if (require.main === module) {
 
   startServer();
 }
+
 
 // Export for Vercel
 

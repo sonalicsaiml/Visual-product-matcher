@@ -1,4 +1,3 @@
-const tf = require("@tensorflow/tfjs");
 const sharp = require("sharp");
 const axios = require("axios");
 
@@ -9,15 +8,16 @@ class ImageProcessor {
   }
 
   async initialize() {
-    if (this.isInitialized) {
-      return;
-    }
+    if (this.isInitialized) return;
+
+    const tf = require("@tensorflow/tfjs"); 
+    this.tf = tf;
 
     try {
       console.log("Loading TensorFlow.js MobileNet model...");
 
       // Use a more reliable model URL
-      this.model = await tf.loadLayersModel(
+      this.model = await this.tf.loadLayersModel(
         "https://storage.googleapis.com/tfjs-models/tfjs/mobilenet_v1_0.25_224/model.json"
       );
 
@@ -25,7 +25,7 @@ class ImageProcessor {
       this.isInitialized = true;
 
       // Warm up the model
-      const dummyInput = tf.zeros([1, 224, 224, 3]);
+      const dummyInput = this.tf.zeros([1, 224, 224, 3]);
       const warmupPrediction = this.model.predict(dummyInput);
       warmupPrediction.dispose();
       dummyInput.dispose();
@@ -50,7 +50,7 @@ class ImageProcessor {
         .toBuffer();
 
       // Create tensor from processed buffer
-      tensor = tf.tensor3d(new Uint8Array(processedBuffer), [224, 224, 3]);
+      tensor = this.tf.tensor3d(new Uint8Array(processedBuffer), [224, 224, 3]);
 
       // Normalize pixel values to [0, 1]
       normalized = tensor.div(255.0);
